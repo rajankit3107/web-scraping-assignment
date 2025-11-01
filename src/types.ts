@@ -10,7 +10,7 @@ export type JiraIssue = {
       assignee?: { displayName: string };
       created: Date;
       updated: Date;
-      comment: { comments: { body: string[] } };
+      comment: { comments: { body: string }[] };
    };
 };
 
