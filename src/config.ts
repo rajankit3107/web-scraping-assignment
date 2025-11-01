@@ -1,4 +1,4 @@
-export const PROJECTS = ['HADOOP', 'SPARK', 'KAFKA']; // 3 Apache projects
+export const PROJECTS = ['JENA', 'TIKA', 'NUTCH'];
 export const BASE_URL = 'https://issues.apache.org/jira/rest/api/2';
 export const OUTPUT_DIR = './data';
 export const PAGE_SIZE = 50;
