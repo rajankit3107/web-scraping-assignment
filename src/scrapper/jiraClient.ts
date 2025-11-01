@@ -1,54 +1,108 @@
 import axios from 'axios';
 import pRetry from 'p-retry';
-import { BASE_URL, PAGE_SIZE, REQUEST_TIMEOUT } from '../config.js';
-import type { JiraResponse } from '../types.js';
+import {
+   BASE_URL,
+   PAGE_SIZE,
+   MAX_RETRIES,
+   REQUEST_TIMEOUT,
+} from '../config.js';
+import type { JiraIssue, JiraIssueResponse } from '../types.js';
 
 const client = axios.create({
    baseURL: BASE_URL,
    timeout: REQUEST_TIMEOUT,
 });
 
-export const fetchIssues = async (
+/**
+ * Check if error is retriable
+ */
+const isRetriableError = (error: unknown): boolean => {
+   if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      // Retry on network errors, 5xx, and rate limits (429)
+      return (
+         !status ||
+         status >= 500 ||
+         status === 429 ||
+         error.code === 'ECONNRESET' ||
+         error.code === 'ETIMEDOUT'
+      );
+   }
+   return false;
+};
+
+/**
+ * Fetch a page of issue keys from JIRA
+ */
+export const fetchIssueKeys = async (
    projectKey: string,
    startAt = 0
-): Promise<JiraResponse> => {
-   const fetch = async (): Promise<JiraResponse> => {
-      try {
-         const res = await client.get<JiraResponse>('/search', {
-            params: {
-               jql: `project=${projectKey}`,
-               startAt,
-               maxResults: PAGE_SIZE,
-               expand: 'comments',
+): Promise<JiraIssueResponse> => {
+   try {
+      const res = await pRetry(
+         () =>
+            client.get<JiraIssueResponse>('/search', {
+               params: {
+                  jql: `project=${projectKey}`,
+                  fields: 'key',
+                  startAt,
+                  maxResults: PAGE_SIZE,
+               },
+            }),
+         {
+            retries: MAX_RETRIES,
+            onFailedAttempt: (error) => {
+               if (!isRetriableError(error)) {
+                  throw error; // Don't retry non-retriable errors
+               }
             },
-         });
-         return res.data;
-      } catch (err: any) {
-         if (err.response) {
-            if (err.response.status === 429) {
-               const retryAfter = err.response.headers['retry-after'];
-               const waitSec = retryAfter ? parseInt(retryAfter, 10) : 10;
-               console.warn(
-                  `Rate limited on ${projectKey}, waiting ${waitSec} seconds...`
-               );
-               await new Promise((r) => setTimeout(r, waitSec * 1000));
-               throw err; // Throw error so pRetry retries
-            } else if (err.response.status >= 500) {
-               // 5xx errors: retryable
-               throw err;
-            }
          }
-         // other error (4xx or network?): propagate
-         throw err;
-      }
-   };
+      );
 
-   return pRetry(fetch, {
-      retries: 5,
-      onFailedAttempt: (error) => {
-         console.warn(
-            `Retry ${error.attemptNumber} for ${projectKey}: ${error.error.message}`
+      return res.data;
+   } catch (error) {
+      if (axios.isAxiosError(error)) {
+         throw new Error(
+            `Failed to fetch issues for ${projectKey} at ${startAt}: ${error.message}`
          );
-      },
-   });
+      }
+      throw error;
+   }
+};
+
+/**
+ * Fetch full issue details (including comments)
+ */
+export const fetchIssueDetails = async (
+   issueKey: string
+): Promise<JiraIssue> => {
+   try {
+      const res = await pRetry(
+         () =>
+            client.get<JiraIssue>(`/issue/${issueKey}`, {
+               params: { expand: 'comment' },
+            }),
+         {
+            retries: MAX_RETRIES,
+            onFailedAttempt: (error) => {
+               if (!isRetriableError(error)) {
+                  throw error; // Don't retry non-retriable errors
+               }
+            },
+         }
+      );
+
+      return res.data;
+   } catch (error) {
+      if (axios.isAxiosError(error)) {
+         const status = error.response?.status;
+         if (status === 404) {
+            throw new Error(`Issue ${issueKey} not found`);
+         }
+         throw new Error(
+            `Failed to fetch details for ${issueKey}: ${error.message}`
+         );
+      }
+      throw error;
+   }
 };
