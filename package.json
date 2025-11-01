@@ -12,5 +12,8 @@
   },
   "scripts": {
     "prepare": "husky"
+  },
+  "dependencies": {
+    "lint-staged": "^16.2.6"
   }
 }
